@@ -72,32 +72,34 @@ TYPE_LABEL = {"REEL": "Reels", "CAROUSEL_ALBUM": "Carousels", "IMAGE": "Images"}
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
-def _auth_gate():
-    if st.session_state.get("authenticated"):
-        return
+ALLOWED_EMAILS = {
+    "syafiq@elevete.com.my",
+    "marketing@elevete.com.my",
+    "edwin@elevete.com.my",
+}
 
-    _, mid, _ = st.columns([1, 1.2, 1])
-    with mid:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown(
-            "<h2 style='text-align:center;color:#E1306C;'>📊 Instagram Analytics</h2>"
-            "<p style='text-align:center;color:#888;margin-top:-8px;'>Team Dashboard</p>",
-            unsafe_allow_html=True,
+def _check_access() -> str:
+    """Returns the logged-in user's email, or stops the app if not authorised."""
+    try:
+        user = st.experimental_user
+        email = getattr(user, "email", None) or ""
+    except Exception:
+        email = ""
+
+    # On Streamlit Community Cloud, email is populated after Google sign-in.
+    # Locally it is empty — allow all for local dev.
+    if not email:
+        return "local"
+
+    if email not in ALLOWED_EMAILS:
+        st.error(
+            f"⛔ Access denied.\n\n"
+            f"**{email}** is not authorised to view this dashboard.\n\n"
+            "Contact syafiq@elevete.com.my to request access."
         )
-        st.markdown("<br>", unsafe_allow_html=True)
-        with st.form("login"):
-            pw = st.text_input("Password", type="password", placeholder="Enter team password")
-            if st.form_submit_button("Sign in", use_container_width=True):
-                try:
-                    correct = st.secrets["DASHBOARD_PASSWORD"]
-                except Exception:
-                    correct = os.getenv("DASHBOARD_PASSWORD", "instagram2024")
-                if pw == correct:
-                    st.session_state.authenticated = True
-                    st.rerun()
-                else:
-                    st.error("Incorrect password.")
-    st.stop()
+        st.stop()
+
+    return email
 
 
 # ── Data loading ───────────────────────────────────────────────────────────────
@@ -112,26 +114,9 @@ def _api_data(token: str, uid: str) -> pd.DataFrame:
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
-def _sidebar(df: pd.DataFrame):
+def _sidebar(df: pd.DataFrame, user_email: str):
     with st.sidebar:
         st.markdown("## ⚙️ Filters")
-        st.markdown("---")
-
-        # API connection
-        st.markdown("**Data source**")
-        mode = st.radio("", ["Demo data", "Instagram API"], label_visibility="collapsed")
-        if mode == "Instagram API":
-            with st.expander("Connect", expanded=True):
-                tok = st.text_input("Access Token", type="password", key="tok")
-                uid = st.text_input("User / Business ID", key="uid")
-                if st.button("Connect →", use_container_width=True):
-                    if tok and uid:
-                        st.session_state.update({"_tok": tok, "_uid": uid, "_mode": "api"})
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        st.error("Enter both fields.")
-
         st.markdown("---")
 
         # Date range
@@ -151,8 +136,9 @@ def _sidebar(df: pd.DataFrame):
         )
 
         st.markdown("---")
+        display = user_email if user_email != "local" else "Local dev"
         st.markdown(
-            "<p style='font-size:11px;color:#aaa;text-align:center;'>syafiq@elevete.com.my</p>",
+            f"<p style='font-size:11px;color:#aaa;text-align:center;'>{display}</p>",
             unsafe_allow_html=True,
         )
 
@@ -775,16 +761,23 @@ def _auto_insights(df: pd.DataFrame) -> list:
 # ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
+def _load_data() -> tuple[pd.DataFrame, bool]:
+    """Load real data from secrets if configured, else fall back to demo."""
+    try:
+        tok = st.secrets["INSTAGRAM_ACCESS_TOKEN"]
+        uid = st.secrets["INSTAGRAM_USER_ID"]
+        if tok and uid:
+            return _api_data(tok, uid), True
+    except Exception:
+        pass
+    return _demo_data(), False
+
+
 def main():
-    _auth_gate()
+    user_email = _check_access()
 
-    # Load data
-    if st.session_state.get("_mode") == "api":
-        df_raw = _api_data(st.session_state["_tok"], st.session_state["_uid"])
-    else:
-        df_raw = _demo_data()
-
-    date_range, sel_types = _sidebar(df_raw)
+    df_raw, using_api = _load_data()
+    date_range, sel_types = _sidebar(df_raw, user_email)
     df = _filter(df_raw, date_range, sel_types)
 
     # Header
@@ -793,10 +786,10 @@ def main():
         unsafe_allow_html=True,
     )
 
-    if st.session_state.get("_mode") != "api":
+    if not using_api:
         st.markdown(
             '<div class="demo-banner">🔮  <strong>Demo mode</strong> — '
-            "connect your Instagram API in the sidebar to see real data.</div>",
+            "add your Instagram API credentials to Streamlit secrets to see real data.</div>",
             unsafe_allow_html=True,
         )
 
