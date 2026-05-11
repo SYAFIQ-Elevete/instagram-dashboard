@@ -20,7 +20,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 
-BASE = "https://graph.instagram.com/v19.0"
+BASE = "https://graph.facebook.com/v19.0"
 
 
 class InstagramAPI:
