@@ -32,7 +32,14 @@ class InstagramAPI:
         p = dict(params or {})
         p["access_token"] = self.token
         r = requests.get(f"{BASE}/{path}", params=p, timeout=15)
-        r.raise_for_status()
+        if not r.ok:
+            try:
+                detail = r.json()
+            except Exception:
+                detail = r.text
+            raise requests.HTTPError(
+                f"{r.status_code} {r.reason} — {detail}", response=r
+            )
         return r.json()
 
     def get_user_info(self) -> dict:
@@ -55,8 +62,8 @@ class InstagramAPI:
 
     def get_media_list(self, limit: int = 100) -> list:
         fields = (
-            "id,caption,media_type,media_url,permalink,timestamp,"
-            "like_count,comments_count,thumbnail_url"
+            "id,caption,media_type,permalink,timestamp,"
+            "like_count,comments_count"
         )
         return self._paginate(
             f"{self.user_id}/media",
@@ -105,7 +112,7 @@ class InstagramAPI:
                 "caption": caption,
                 "permalink": m.get("permalink", ""),
                 "hashtags": [w[1:] for w in caption.split() if w.startswith("#")],
-                "duration_seconds": 0,  # not exposed by API
+                "duration_seconds": 0,
                 "impressions": ins.get("impressions", 0),
                 "reach": ins.get("reach", 0),
                 "likes": m.get("like_count", 0),
@@ -115,6 +122,8 @@ class InstagramAPI:
                 "video_views": ins.get("plays", ins.get("video_views", 0)),
                 "avg_watch_time_ms": ins.get("ig_reels_avg_watch_time", 0),
                 "total_watch_time_ms": ins.get("ig_reels_video_view_total_time", 0),
+                "media_url": m.get("media_url", ""),
+                "thumbnail_url": m.get("thumbnail_url", ""),
             })
 
         bar.empty()
