@@ -679,8 +679,16 @@ def _auto_insights(df: pd.DataFrame) -> list:
 
     # Best content type
     if df["media_type"].nunique() > 1:
-        best_type = df.groupby("media_type")["engagement_rate"].mean().idxmax()
-        best_er = df.groupby("media_type")["engagement_rate"].mean().max()
+        type_er = df.groupby("media_type")["engagement_rate"].mean().dropna()
+        if type_er.empty:
+            best_type = None
+        else:
+            best_type = type_er.idxmax()
+            best_er = type_er.max()
+    else:
+        best_type = None
+
+    if best_type is not None:
         out.append({
             "icon": "🏆",
             "title": f"{TYPE_LABEL[best_type]} have your highest engagement",
@@ -713,6 +721,8 @@ def _auto_insights(df: pd.DataFrame) -> list:
 
     # Save rate
     avg_save = df["save_rate"].mean()
+    if pd.isna(avg_save):
+        avg_save = 0.0
     if avg_save < 1.5:
         out.append({
             "icon": "💾",
@@ -729,14 +739,16 @@ def _auto_insights(df: pd.DataFrame) -> list:
         })
 
     # Best posting day
-    best_day = df.groupby("day_of_week")["engagement_rate"].mean().idxmax()
-    best_day_er = df.groupby("day_of_week")["engagement_rate"].mean().max()
-    out.append({
-        "icon": "📅",
-        "title": f"{best_day} is your strongest posting day",
-        "body": f"Posts on **{best_day}** average **{best_day_er:.2f}% ER** — highest of any day in this period.",
-        "action": f"Schedule your most important creative for {best_day}.",
-    })
+    day_er = df.groupby("day_of_week")["engagement_rate"].mean().dropna()
+    if not day_er.empty:
+        best_day = day_er.idxmax()
+        best_day_er = day_er.max()
+        out.append({
+            "icon": "📅",
+            "title": f"{best_day} is your strongest posting day",
+            "body": f"Posts on **{best_day}** average **{best_day_er:.2f}% ER** — highest of any day in this period.",
+            "action": f"Schedule your most important creative for {best_day}.",
+        })
 
     # Share rate
     if df["share_rate"].mean() < 0.5:
