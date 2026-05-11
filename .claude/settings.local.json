@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"/Users/syafiqlee/Desktop/Claude/Instagram Dashboard/utils\" \"/Users/syafiqlee/Desktop/Claude/Instagram Dashboard/.streamlit\")",
+      "Bash(pip install *)",
+      "Bash(pip3 install *)",
+      "Bash(python3 -c ' *)",
+      "Bash(streamlit run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8501/healthz)",
+      "Bash(python3 -m streamlit --version)",
+      "Read(//Library/Frameworks/Python.framework/Versions/3.13/bin/**)",
+      "Bash(python3 -m streamlit run app.py --server.headless true --server.port 8502)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8502/healthz)",
+      "Bash(pkill -f \"streamlit run app.py\")",
+      "Bash(git init *)"
+    ],
+    "additionalDirectories": [
+      "/Users/syafiqlee/Desktop/Claude/Instagram Dashboard"
+    ]
+  }
+}
