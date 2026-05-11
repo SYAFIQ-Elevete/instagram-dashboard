@@ -766,11 +766,18 @@ def _load_data() -> tuple[pd.DataFrame, bool]:
     try:
         tok = st.secrets["INSTAGRAM_ACCESS_TOKEN"]
         uid = st.secrets["INSTAGRAM_USER_ID"]
-        if tok and uid:
-            return _api_data(tok, uid), True
     except Exception:
-        pass
-    return _demo_data(), False
+        return _demo_data(), False   # secrets not configured
+
+    try:
+        df = _api_data(tok, uid)
+        if df.empty:
+            st.warning("API connected but returned no posts. Check your Instagram User ID.")
+            return _demo_data(), False
+        return df, True
+    except Exception as e:
+        st.error(f"Instagram API error: {e}")
+        return _demo_data(), False
 
 
 def main():
