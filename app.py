@@ -62,13 +62,14 @@ button[data-baseweb="tab"] { font-size:14px; font-weight:600; }
 # ── Colour palette ─────────────────────────────────────────────────────────────
 C = {
     "REEL": "#E1306C",
+    "VIDEO": "#F77737",
     "CAROUSEL_ALBUM": "#405DE6",
     "IMAGE": "#833AB4",
     "good": "#00C851",
     "warn": "#FFD700",
     "bad": "#FF4444",
 }
-TYPE_LABEL = {"REEL": "Reels", "CAROUSEL_ALBUM": "Carousels", "IMAGE": "Images"}
+TYPE_LABEL = {"REEL": "Reels", "VIDEO": "Videos", "CAROUSEL_ALBUM": "Carousels", "IMAGE": "Images"}
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
@@ -110,7 +111,11 @@ def _demo_data() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def _api_data(token: str, uid: str) -> pd.DataFrame:
-    return add_derived_metrics(InstagramAPI(token, uid).fetch_all_posts())
+    api = InstagramAPI(token, uid)
+    df = add_derived_metrics(api.fetch_all_posts())
+    if hasattr(api, "_last_insights_error") and api._last_insights_error:
+        st.warning(f"Insights unavailable for some posts: {api._last_insights_error}")
+    return df
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -178,13 +183,15 @@ def tab_overview(df: pd.DataFrame):
 
     # KPI row
     k1, k2, k3, k4, k5 = st.columns(5)
+    _er = df['engagement_rate'].mean()
+    _sr = df['save_rate'].mean()
     k1.metric("Posts", len(df))
-    k2.metric("Avg Engagement Rate", f"{df['engagement_rate'].mean():.2f}%",
+    k2.metric("Avg Engagement Rate", f"{_er:.2f}%" if pd.notna(_er) else "N/A",
               help="(likes + comments + saves + shares) ÷ reach × 100")
     k3.metric("Total Reach", _fmt_num(df["reach"].sum()))
-    k4.metric("Avg Save Rate", f"{df['save_rate'].mean():.2f}%",
+    k4.metric("Avg Save Rate", f"{_sr:.2f}%" if pd.notna(_sr) else "N/A",
               help="saves ÷ reach × 100 — best signal of content value")
-    k5.metric("Avg Shares / Post", f"{df['shares'].mean():.0f}")
+    k5.metric("Avg Shares / Post", f"{df['shares'].mean():.0f}" if pd.notna(df['shares'].mean()) else "N/A")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -291,7 +298,7 @@ def tab_posts(df: pd.DataFrame):
         asc = st.radio("Order", ["Highest first", "Lowest first"], horizontal=True) == "Lowest first"
 
     tier_icon = {"Excellent": "🟢", "Good": "🔵", "Average": "🟡", "Low": "🔴"}
-    type_icon = {"REEL": "🎬", "CAROUSEL_ALBUM": "🖼️", "IMAGE": "📸"}
+    type_icon = {"REEL": "🎬", "VIDEO": "🎬", "CAROUSEL_ALBUM": "🖼️", "IMAGE": "📸"}
 
     for _, r in df.sort_values(sort_by, ascending=asc).iterrows():
         label = (
@@ -333,7 +340,7 @@ def tab_posts(df: pd.DataFrame):
 # TAB 3 — Reels
 # ══════════════════════════════════════════════════════════════════════════════
 def tab_reels(df: pd.DataFrame):
-    reels = df[df["media_type"] == "REEL"].copy()
+    reels = df[df["media_type"].isin(["REEL", "VIDEO"])].copy()
     if reels.empty:
         st.info("No reels in the selected period.")
         return

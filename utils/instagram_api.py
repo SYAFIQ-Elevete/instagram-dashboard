@@ -82,7 +82,8 @@ class InstagramAPI:
         try:
             data = self._get(f"{media_id}/insights", {"metric": metrics})
             return {item["name"]: item["value"] for item in data.get("data", [])}
-        except Exception:
+        except Exception as e:
+            self._last_insights_error = str(e)
             return {}
 
     def fetch_all_posts(self) -> pd.DataFrame:
