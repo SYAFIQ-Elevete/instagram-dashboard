@@ -56,7 +56,7 @@ class InstagramAPI:
     def get_media_list(self, limit: int = 100) -> list:
         fields = (
             "id,caption,media_type,media_url,permalink,timestamp,"
-            "like_count,comments_count,thumbnail_url,is_shared_to_feed"
+            "like_count,comments_count,thumbnail_url"
         )
         return self._paginate(
             f"{self.user_id}/media",
