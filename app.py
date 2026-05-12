@@ -110,12 +110,11 @@ def _demo_data() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def _api_data(token: str, uid: str) -> pd.DataFrame:
+def _api_data(token: str, uid: str) -> tuple[pd.DataFrame, str]:
     api = InstagramAPI(token, uid)
     df = add_derived_metrics(api.fetch_all_posts())
-    if hasattr(api, "_last_insights_error") and api._last_insights_error:
-        st.warning(f"Insights unavailable for some posts: {api._last_insights_error}")
-    return df
+    err = getattr(api, "_last_insights_error", "")
+    return df, err
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -141,6 +140,9 @@ def _sidebar(df: pd.DataFrame, user_email: str):
         )
 
         st.markdown("---")
+        if st.button("🔄 Refresh data", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
         display = user_email if user_email != "local" else "Local dev"
         st.markdown(
             f"<p style='font-size:11px;color:#aaa;text-align:center;'>{display}</p>",
@@ -789,10 +791,12 @@ def _load_data() -> tuple[pd.DataFrame, bool]:
         return _demo_data(), False   # secrets not configured
 
     try:
-        df = _api_data(tok, uid)
+        df, ins_err = _api_data(tok, uid)
         if df.empty:
             st.warning("API connected but returned no posts. Check your Instagram User ID.")
             return _demo_data(), False
+        if ins_err:
+            st.warning(f"Insights API error (some metrics may be 0): {ins_err}")
         return df, True
     except Exception as e:
         st.error(f"Instagram API error: {e}")
