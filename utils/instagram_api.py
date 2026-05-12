@@ -72,27 +72,41 @@ class InstagramAPI:
         )
 
     def get_media_insights(self, media_id: str, media_type: str) -> dict:
-        # impressions deprecated from v22+; video_views not supported for VIDEO product type
+        # impressions deprecated from v22+; request lifetime period for correct totals
         if media_type == "REEL":
             metrics = "reach,saved,shares,plays,ig_reels_avg_watch_time,ig_reels_video_view_total_time"
         elif media_type == "VIDEO":
-            metrics = "reach,saved,shares"
+            # VIDEO may actually be a Reel served in old format — try plays too
+            metrics = "reach,saved,shares,plays"
         else:
             metrics = "reach,saved,shares"
 
         try:
-            data = self._get(f"{media_id}/insights", {"metric": metrics})
+            data = self._get(f"{media_id}/insights", {"metric": metrics, "period": "lifetime"})
             result = {}
             for item in data.get("data", []):
                 name = item.get("name")
                 if "value" in item:
                     result[name] = item["value"]
                 elif "values" in item and item["values"]:
-                    result[name] = item["values"][0].get("value", 0)
+                    # sum all values to get the lifetime total across all periods
+                    result[name] = sum(v.get("value", 0) for v in item["values"])
             return result
         except Exception as e:
-            self._last_insights_error = str(e)
-            return {}
+            # some metrics may not be supported — retry with minimal set
+            try:
+                data = self._get(f"{media_id}/insights", {"metric": "reach,saved,shares", "period": "lifetime"})
+                result = {}
+                for item in data.get("data", []):
+                    name = item.get("name")
+                    if "value" in item:
+                        result[name] = item["value"]
+                    elif "values" in item and item["values"]:
+                        result[name] = sum(v.get("value", 0) for v in item["values"])
+                return result
+            except Exception as e2:
+                self._last_insights_error = str(e2)
+                return {}
 
     def fetch_all_posts(self) -> pd.DataFrame:
         import streamlit as st
