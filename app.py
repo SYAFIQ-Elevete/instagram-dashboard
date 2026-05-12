@@ -110,11 +110,15 @@ def _demo_data() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def _api_data(token: str, uid: str) -> tuple[pd.DataFrame, str]:
+def _api_data(token: str, uid: str) -> tuple[pd.DataFrame, str, dict]:
     api = InstagramAPI(token, uid)
     df = add_derived_metrics(api.fetch_all_posts())
     err = getattr(api, "_last_insights_error", "")
-    return df, err
+    try:
+        user_info = api.get_user_info()
+    except Exception:
+        user_info = {}
+    return df, err, user_info
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -168,6 +172,12 @@ def _sec(label: str):
 
 
 def _fmt_num(n) -> str:
+    try:
+        n = float(n)
+        if np.isnan(n):
+            return "—"
+    except Exception:
+        return "—"
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
     if n >= 1_000:
@@ -175,25 +185,71 @@ def _fmt_num(n) -> str:
     return str(int(n))
 
 
+def _fmt_pct(v, decimals=2) -> str:
+    try:
+        if v is None or pd.isna(v) or np.isnan(float(v)):
+            return "—"
+        return f"{float(v):.{decimals}f}%"
+    except Exception:
+        return "—"
+
+
+def _prev_period(df_full: pd.DataFrame, date_range: str) -> pd.DataFrame:
+    days = {"Last 7 days": 7, "Last 14 days": 14, "Last 30 days": 30, "Last 90 days": 90}.get(date_range, 30)
+    curr_start = datetime.now() - timedelta(days=days)
+    prev_start = curr_start - timedelta(days=days)
+    ts = df_full["timestamp"].dt.tz_localize(None)
+    return df_full[(ts >= prev_start) & (ts < curr_start)].copy()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — Overview
 # ══════════════════════════════════════════════════════════════════════════════
-def tab_overview(df: pd.DataFrame):
+def tab_overview(df: pd.DataFrame, df_full: pd.DataFrame, date_range: str):
     if df.empty:
         st.warning("No posts match your current filters.")
         return
 
+    prev = _prev_period(df_full, date_range)
+
+    def _dp(curr, prev_val, mode="pct"):
+        """Delta string vs previous period."""
+        try:
+            if prev_val is None or pd.isna(prev_val) or pd.isna(curr):
+                return None
+            if mode == "pct":
+                if prev_val == 0:
+                    return None
+                return f"{(curr - prev_val) / abs(prev_val) * 100:+.0f}% vs prev period"
+            return f"{curr - prev_val:+.2f}pp vs prev period"
+        except Exception:
+            return None
+
     # KPI row
     k1, k2, k3, k4, k5 = st.columns(5)
-    _er = df['engagement_rate'].mean()
-    _sr = df['save_rate'].mean()
-    k1.metric("Posts", len(df))
-    k2.metric("Avg Engagement Rate", f"{_er:.2f}%" if pd.notna(_er) else "N/A",
+    _er   = df["engagement_rate"].mean()
+    _sr   = df["save_rate"].mean()
+    _reach = df["reach"].sum()
+    _saves = df["saves"].sum()
+
+    _er_p   = prev["engagement_rate"].mean() if not prev.empty else None
+    _sr_p   = prev["save_rate"].mean()       if not prev.empty else None
+    _reach_p = prev["reach"].sum()           if not prev.empty else None
+    _saves_p = prev["saves"].sum()           if not prev.empty else None
+
+    k1.metric("Posts", len(df),
+              delta=f"{len(df) - len(prev):+d} vs prev period" if not prev.empty else None)
+    k2.metric("Avg Engagement Rate", _fmt_pct(_er),
+              delta=_dp(_er, _er_p, "pp"),
               help="(likes + comments + saves + shares) ÷ reach × 100")
-    k3.metric("Total Reach", _fmt_num(df["reach"].sum()))
-    k4.metric("Avg Save Rate", f"{_sr:.2f}%" if pd.notna(_sr) else "N/A",
-              help="saves ÷ reach × 100 — best signal of content value")
-    k5.metric("Avg Shares / Post", f"{df['shares'].mean():.0f}" if pd.notna(df['shares'].mean()) else "N/A")
+    k3.metric("Total Reach", _fmt_num(_reach),
+              delta=_dp(_reach, _reach_p))
+    k4.metric("Total Saves", _fmt_num(_saves),
+              delta=_dp(_saves, _saves_p),
+              help="saves ÷ reach × 100 — best algorithmic signal")
+    k5.metric("Avg Save Rate", _fmt_pct(_sr),
+              delta=_dp(_sr, _sr_p, "pp"),
+              help="saves ÷ reach × 100")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -201,11 +257,14 @@ def tab_overview(df: pd.DataFrame):
     left, right = st.columns([2.2, 1])
     with left:
         _sec("Engagement Rate Over Time")
+        df_chart = df.sort_values("timestamp").copy()
+        df_chart["Content Type"] = df_chart["media_type"].map(TYPE_LABEL)
+        c_map = {v: C[k] for k, v in TYPE_LABEL.items() if k in df_chart["media_type"].values}
         fig = px.line(
-            df.sort_values("timestamp"),
-            x="timestamp", y="engagement_rate", color="media_type",
-            color_discrete_map=C, markers=True,
-            labels={"engagement_rate": "ER%", "timestamp": "", "media_type": ""},
+            df_chart,
+            x="timestamp", y="engagement_rate", color="Content Type",
+            color_discrete_map=c_map, markers=True,
+            labels={"engagement_rate": "ER%", "timestamp": ""},
             custom_data=["caption_short", "reach", "saves", "performance_score"],
         )
         fig.update_traces(
@@ -223,14 +282,14 @@ def tab_overview(df: pd.DataFrame):
         mix = df["media_type"].value_counts().reset_index()
         mix.columns = ["Type", "Count"]
         mix["Label"] = mix["Type"].map(TYPE_LABEL)
-        fig = px.pie(mix, values="Count", names="Label", color="Type",
-                     color_discrete_map=C, hole=0.55)
+        fig = px.pie(mix, values="Count", names="Label", color="Label",
+                     color_discrete_map={v: C[k] for k, v in TYPE_LABEL.items()},
+                     hole=0.55)
         fig.update_traces(textposition="inside", textinfo="percent+label")
-        fig.update_layout(height=300, margin=dict(l=0, r=0, t=8, b=0),
-                          showlegend=False)
+        fig.update_layout(height=300, margin=dict(l=0, r=0, t=8, b=0), showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
-    # Per-type comparison
+    # Per-type comparison — horizontal bars, easier to read
     _sec("Average Metrics by Content Type")
     summary = (
         df.groupby("media_type")
@@ -243,31 +302,37 @@ def tab_overview(df: pd.DataFrame):
     summary["label"] = summary["media_type"].map(TYPE_LABEL)
 
     c1, c2, c3, c4 = st.columns(4)
-    for col, field, title in [
-        (c1, "avg_er",    "Avg Engagement Rate (%)"),
-        (c2, "avg_save",  "Avg Save Rate (%)"),
-        (c3, "avg_share", "Avg Share Rate (%)"),
-        (c4, "avg_reach", "Avg Reach"),
+    for col, field, title, suffix in [
+        (c1, "avg_er",    "Avg Engagement Rate", "%"),
+        (c2, "avg_save",  "Avg Save Rate",        "%"),
+        (c3, "avg_share", "Avg Share Rate",        "%"),
+        (c4, "avg_reach", "Avg Reach",             ""),
     ]:
-        fig = px.bar(summary, x="label", y=field,
+        fig = px.bar(summary, x=field, y="label", orientation="h",
                      color="media_type", color_discrete_map=C,
+                     text=summary[field].apply(lambda v: _fmt_pct(v) if suffix == "%" else _fmt_num(v)),
                      title=title, labels={"label": "", field: ""})
-        fig.update_layout(height=220, showlegend=False,
-                          margin=dict(l=0, r=0, t=28, b=0))
+        fig.update_traces(textposition="outside")
+        fig.update_layout(height=200, showlegend=False,
+                          margin=dict(l=0, r=40, t=28, b=0),
+                          yaxis=dict(autorange="reversed"))
         col.plotly_chart(fig, use_container_width=True)
 
     # Top posts
     _sec("Top 5 Posts by Performance Score")
     top5 = df.nlargest(5, "performance_score")[
         ["media_type", "timestamp", "caption_short",
-         "reach", "engagement_rate", "save_rate", "shares", "performance_score"]
+         "reach", "likes", "saves", "shares", "engagement_rate", "save_rate", "performance_score"]
     ].copy()
-    top5["timestamp"] = top5["timestamp"].dt.strftime("%b %d")
-    top5["media_type"] = top5["media_type"].map(TYPE_LABEL)
-    top5["reach"] = top5["reach"].apply(_fmt_num)
-    top5["engagement_rate"] = top5["engagement_rate"].apply(lambda v: f"{v:.2f}%")
-    top5["save_rate"] = top5["save_rate"].apply(lambda v: f"{v:.2f}%")
-    top5.columns = ["Type", "Date", "Caption", "Reach", "ER%", "Save Rate%", "Shares", "Score"]
+    top5["timestamp"]      = top5["timestamp"].dt.strftime("%b %d")
+    top5["media_type"]     = top5["media_type"].map(TYPE_LABEL)
+    top5["reach"]          = top5["reach"].apply(_fmt_num)
+    top5["likes"]          = top5["likes"].apply(_fmt_num)
+    top5["saves"]          = top5["saves"].apply(_fmt_num)
+    top5["shares"]         = top5["shares"].apply(_fmt_num)
+    top5["engagement_rate"] = top5["engagement_rate"].apply(_fmt_pct)
+    top5["save_rate"]      = top5["save_rate"].apply(_fmt_pct)
+    top5.columns = ["Type", "Date", "Caption", "Reach", "Likes", "Saves", "Shares", "ER%", "Save Rate", "Score"]
     st.dataframe(top5, use_container_width=True, hide_index=True)
 
 
@@ -303,34 +368,40 @@ def tab_posts(df: pd.DataFrame):
     type_icon = {"REEL": "🎬", "VIDEO": "🎬", "CAROUSEL_ALBUM": "🖼️", "IMAGE": "📸"}
 
     for _, r in df.sort_values(sort_by, ascending=asc).iterrows():
+        reach_str = _fmt_num(r["reach"])
+        er_str    = _fmt_pct(r["engagement_rate"])
+        saves_str = _fmt_num(r["saves"])
+        likes_str = _fmt_num(r["likes"])
         label = (
             f"{tier_icon.get(str(r['performance_tier']), '⚪')} "
             f"{type_icon.get(r['media_type'], '📄')} "
             f"{r['timestamp'].strftime('%b %d, %Y')}  ·  "
-            f"Score {r['performance_score']}/100  ·  {r['caption'][:70]}…"
+            f"Reach {reach_str}  ·  ER {er_str}  ·  "
+            f"Saves {saves_str}  ·  Likes {likes_str}  ·  "
+            f"Score {r['performance_score']}/100"
         )
         with st.expander(label, expanded=False):
+            st.caption(f"📝 {r['caption'][:120]}…" if len(str(r['caption'])) > 120 else f"📝 {r['caption']}")
+            st.markdown("")
             a, b, c, d = st.columns(4)
-            a.metric("Reach", _fmt_num(r["reach"]))
-            a.metric("Impressions", _fmt_num(r["impressions"]))
-            b.metric("Engagement Rate", f"{r['engagement_rate']:.2f}%")
-            b.metric("Save Rate", f"{r['save_rate']:.2f}%")
-            c.metric("Saves", _fmt_num(r["saves"]))
-            c.metric("Shares", _fmt_num(r["shares"]))
-            d.metric("Likes", _fmt_num(r["likes"]))
-            d.metric("Comments", _fmt_num(r["comments"]))
+            a.metric("Reach",           _fmt_num(r["reach"]))
+            a.metric("Likes",           _fmt_num(r["likes"]))
+            b.metric("Engagement Rate", _fmt_pct(r["engagement_rate"]))
+            b.metric("Save Rate",       _fmt_pct(r["save_rate"]))
+            c.metric("Saves",           _fmt_num(r["saves"]))
+            c.metric("Shares",          _fmt_num(r["shares"]))
+            d.metric("Comments",        _fmt_num(r["comments"]))
+            d.metric("Score",           f"{r['performance_score']}/100")
 
-            if r["media_type"] == "REEL":
+            if r["media_type"] in ("REEL", "VIDEO") and r["video_views"] > 0:
                 st.markdown("---")
                 v1, v2, v3, v4 = st.columns(4)
                 v1.metric("Video Plays", _fmt_num(r["video_views"]))
-                if not pd.isna(r.get("play_rate")):
-                    v2.metric("Play Rate", f"{r['play_rate']:.0f}%",
-                              help="Plays ÷ reach — how many who saw it clicked play")
-                if not pd.isna(r.get("avg_watch_time_sec")):
-                    v3.metric("Avg Watch Time", f"{r['avg_watch_time_sec']:.1f}s")
-                if not pd.isna(r.get("completion_rate")):
-                    v4.metric("Completion Rate", f"{r['completion_rate']:.0f}%")
+                v2.metric("Play Rate",   _fmt_pct(r.get("play_rate"), 0))
+                v3.metric("Avg Watch Time",
+                          f"{r['avg_watch_time_sec']:.1f}s" if pd.notna(r.get("avg_watch_time_sec")) else "—")
+                v4.metric("Completion Rate",
+                          _fmt_pct(r.get("completion_rate"), 0))
 
             st.markdown(
                 f"**Tier:** {r['performance_tier']}  ·  "
@@ -782,39 +853,59 @@ def _auto_insights(df: pd.DataFrame) -> list:
 # ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
-def _load_data() -> tuple[pd.DataFrame, bool]:
+def _load_data() -> tuple[pd.DataFrame, bool, dict]:
     """Load real data from secrets if configured, else fall back to demo."""
     try:
         tok = st.secrets["INSTAGRAM_ACCESS_TOKEN"]
         uid = st.secrets["INSTAGRAM_USER_ID"]
     except Exception:
-        return _demo_data(), False   # secrets not configured
+        return _demo_data(), False, {}
 
     try:
-        df, ins_err = _api_data(tok, uid)
+        df, ins_err, user_info = _api_data(tok, uid)
         if df.empty:
             st.warning("API connected but returned no posts. Check your Instagram User ID.")
-            return _demo_data(), False
+            return _demo_data(), False, {}
         if ins_err:
             st.warning(f"Insights API error (some metrics may be 0): {ins_err}")
-        return df, True
+        return df, True, user_info
     except Exception as e:
         st.error(f"Instagram API error: {e}")
-        return _demo_data(), False
+        return _demo_data(), False, {}
 
 
 def main():
     user_email = _check_access()
 
-    df_raw, using_api = _load_data()
+    df_raw, using_api, user_info = _load_data()
     date_range, sel_types = _sidebar(df_raw, user_email)
     df = _filter(df_raw, date_range, sel_types)
 
-    # Header
-    st.markdown(
-        "<h1 style='margin-bottom:2px;'>📊 Instagram Analytics Dashboard</h1>",
-        unsafe_allow_html=True,
-    )
+    # Account header
+    if using_api and user_info:
+        pic  = user_info.get("profile_picture_url", "")
+        name = user_info.get("name", "")
+        uname = user_info.get("username", "")
+        followers = user_info.get("followers_count", 0)
+        media_ct  = user_info.get("media_count", 0)
+        h_pic, h_info = st.columns([0.06, 1])
+        if pic:
+            h_pic.image(pic, width=56)
+        h_info.markdown(
+            f"<div style='padding-top:6px'>"
+            f"<span style='font-size:20px;font-weight:700;'>@{uname}</span>"
+            f"&nbsp;&nbsp;<span style='color:#666;font-size:14px;'>{name}</span><br>"
+            f"<span style='color:#888;font-size:13px;'>"
+            f"👥 {_fmt_num(followers)} followers &nbsp;·&nbsp; 📸 {media_ct} posts total"
+            f"</span></div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
+    else:
+        st.markdown(
+            "<h1 style='margin-bottom:2px;'>📊 Instagram Analytics Dashboard</h1>",
+            unsafe_allow_html=True,
+        )
 
     if not using_api:
         st.markdown(
@@ -838,7 +929,7 @@ def main():
         "🖼️  Carousels & Images",
         "🧠  Strategy",
     ])
-    with t1: tab_overview(df)
+    with t1: tab_overview(df, df_raw, date_range)
     with t2: tab_posts(df)
     with t3: tab_reels(df)
     with t4: tab_static(df)
