@@ -72,12 +72,13 @@ class InstagramAPI:
         )
 
     def get_media_insights(self, media_id: str, media_type: str) -> dict:
+        # impressions deprecated from v22+; video_views not supported for VIDEO product type
         if media_type == "REEL":
-            metrics = "impressions,reach,saved,shares,plays,ig_reels_avg_watch_time,ig_reels_video_view_total_time"
+            metrics = "reach,saved,shares,plays,ig_reels_avg_watch_time,ig_reels_video_view_total_time"
         elif media_type == "VIDEO":
-            metrics = "impressions,reach,saved,shares,video_views"
+            metrics = "reach,saved,shares"
         else:
-            metrics = "impressions,reach,saved,shares"
+            metrics = "reach,saved,shares"
 
         try:
             data = self._get(f"{media_id}/insights", {"metric": metrics})
@@ -114,7 +115,7 @@ class InstagramAPI:
                 "permalink": m.get("permalink", ""),
                 "hashtags": [w[1:] for w in caption.split() if w.startswith("#")],
                 "duration_seconds": 0,
-                "impressions": ins.get("impressions", 0),
+                "impressions": ins.get("reach", 0),
                 "reach": ins.get("reach", 0),
                 "likes": m.get("like_count", 0),
                 "comments": m.get("comments_count", 0),
