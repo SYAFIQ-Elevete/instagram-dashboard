@@ -82,7 +82,14 @@ class InstagramAPI:
 
         try:
             data = self._get(f"{media_id}/insights", {"metric": metrics})
-            return {item["name"]: item["value"] for item in data.get("data", [])}
+            result = {}
+            for item in data.get("data", []):
+                name = item.get("name")
+                if "value" in item:
+                    result[name] = item["value"]
+                elif "values" in item and item["values"]:
+                    result[name] = item["values"][0].get("value", 0)
+            return result
         except Exception as e:
             self._last_insights_error = str(e)
             return {}
