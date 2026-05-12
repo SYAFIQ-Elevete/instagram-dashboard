@@ -136,7 +136,7 @@ def _demo_data() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def _api_data(token: str, uid: str) -> tuple[pd.DataFrame, str, dict]:
+def _api_data(token: str, uid: str) -> tuple[pd.DataFrame, str, dict, dict, pd.DataFrame]:
     api = InstagramAPI(token, uid)
     df = add_derived_metrics(api.fetch_all_posts())
     err = getattr(api, "_last_insights_error", "")
@@ -144,7 +144,15 @@ def _api_data(token: str, uid: str) -> tuple[pd.DataFrame, str, dict]:
         user_info = api.get_user_info()
     except Exception:
         user_info = {}
-    return df, err, user_info
+    try:
+        demographics = api.get_audience_demographics()
+    except Exception:
+        demographics = {}
+    try:
+        follower_growth = api.get_follower_growth(90)
+    except Exception:
+        follower_growth = pd.DataFrame()
+    return df, err, user_info, demographics, follower_growth
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -916,33 +924,167 @@ def _auto_insights(df: pd.DataFrame) -> list:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — Audience
+# ══════════════════════════════════════════════════════════════════════════════
+def tab_audience(demographics: dict, follower_growth: pd.DataFrame, user_info: dict):
+    followers_total = user_info.get("followers_count", 0)
+
+    # ── Follower growth ────────────────────────────────────────────────────────
+    _sec("Follower Growth (Last 90 Days)")
+    if not follower_growth.empty:
+        start_val = follower_growth["followers"].iloc[0]
+        end_val   = follower_growth["followers"].iloc[-1]
+        net_gain  = end_val - start_val
+        pct_gain  = (net_gain / start_val * 100) if start_val else 0
+
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Current Followers", _fmt_num(followers_total))
+        k2.metric("90-Day Net Growth",  f"{net_gain:+,}",
+                  delta=f"{pct_gain:+.1f}%")
+        k3.metric("Avg Growth / Day",
+                  f"{net_gain / max(len(follower_growth), 1):+.0f}")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        fig = px.area(
+            follower_growth, x="date", y="followers",
+            labels={"date": "", "followers": "Followers"},
+            color_discrete_sequence=["#E1306C"],
+        )
+        fig.update_traces(fill="tozeroy", fillcolor="rgba(225,48,108,0.08)",
+                          line_color="#E1306C")
+        fig.update_layout(height=280, margin=dict(l=0, r=0, t=8, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Follower growth data is not available for this account. "
+                "Make sure your token has the `instagram_manage_insights` permission.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Demographics ───────────────────────────────────────────────────────────
+    if not demographics:
+        st.info("Audience demographics require `instagram_manage_insights` permission "
+                "and a Business/Creator account with sufficient followers.")
+        return
+
+    # Gender + Age
+    gender_age = demographics.get("audience_gender_age", {})
+    if gender_age:
+        _sec("Audience — Age & Gender")
+
+        rows = []
+        for key, pct in gender_age.items():
+            parts = key.split(".")
+            if len(parts) == 2:
+                rows.append({"Gender": "Male" if parts[0] == "M" else
+                             "Female" if parts[0] == "F" else "Other",
+                             "Age": parts[1], "Pct": round(pct * 100, 1)})
+        age_df = pd.DataFrame(rows)
+
+        left, right = st.columns(2)
+
+        with left:
+            gender_totals = age_df.groupby("Gender")["Pct"].sum().reset_index()
+            fig = px.pie(gender_totals, values="Pct", names="Gender", hole=0.6,
+                         color_discrete_sequence=["#E1306C", "#405DE6", "#aaa"])
+            fig.update_traces(textinfo="percent+label", textposition="outside")
+            fig.update_layout(height=280, showlegend=False,
+                              margin=dict(l=0, r=0, t=8, b=0),
+                              annotations=[dict(text="Gender", x=0.5, y=0.5,
+                                               font_size=13, showarrow=False)])
+            left.plotly_chart(fig, use_container_width=True)
+
+        with right:
+            age_totals = age_df.groupby("Age")["Pct"].sum().reset_index().sort_values("Age")
+            fig = px.bar(age_totals, x="Age", y="Pct",
+                         color_discrete_sequence=["#E1306C"],
+                         labels={"Age": "Age group", "Pct": "% of audience"},
+                         text=age_totals["Pct"].apply(lambda v: f"{v:.1f}%"))
+            fig.update_traces(textposition="outside")
+            fig.update_layout(height=280, margin=dict(l=0, r=0, t=8, b=0))
+            right.plotly_chart(fig, use_container_width=True)
+
+        # Gender × Age heatmap
+        if not age_df.empty:
+            pivot = age_df.pivot_table(index="Gender", columns="Age",
+                                       values="Pct", aggfunc="sum").fillna(0)
+            fig = px.imshow(pivot, text_auto=".1f",
+                            color_continuous_scale="RdPu",
+                            labels=dict(color="% audience"),
+                            aspect="auto")
+            fig.update_layout(height=200, margin=dict(l=0, r=0, t=8, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+
+    # City breakdown
+    city_data = demographics.get("audience_city", {})
+    if city_data:
+        _sec("Top Cities")
+        city_df = (pd.DataFrame(list(city_data.items()), columns=["City", "Pct"])
+                   .assign(Pct=lambda d: (d["Pct"] * 100).round(1))
+                   .nlargest(10, "Pct"))
+        fig = px.bar(city_df, x="Pct", y="City", orientation="h",
+                     color_discrete_sequence=["#405DE6"],
+                     text=city_df["Pct"].apply(lambda v: f"{v:.1f}%"),
+                     labels={"Pct": "% of audience", "City": ""})
+        fig.update_traces(textposition="outside")
+        fig.update_layout(height=340, margin=dict(l=0, r=40, t=8, b=0),
+                          yaxis=dict(autorange="reversed"))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Country breakdown
+    country_data = demographics.get("audience_country", {})
+    if country_data:
+        _sec("Top Countries")
+        country_df = (pd.DataFrame(list(country_data.items()), columns=["Country", "Pct"])
+                      .assign(Pct=lambda d: (d["Pct"] * 100).round(1))
+                      .nlargest(10, "Pct"))
+        left, right = st.columns(2)
+        with left:
+            fig = px.bar(country_df, x="Pct", y="Country", orientation="h",
+                         color_discrete_sequence=["#833AB4"],
+                         text=country_df["Pct"].apply(lambda v: f"{v:.1f}%"),
+                         labels={"Pct": "% of audience", "Country": ""})
+            fig.update_traces(textposition="outside")
+            fig.update_layout(height=340, margin=dict(l=0, r=40, t=8, b=0),
+                              yaxis=dict(autorange="reversed"))
+            left.plotly_chart(fig, use_container_width=True)
+        with right:
+            fig = px.pie(country_df, values="Pct", names="Country", hole=0.5,
+                         color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig.update_traces(textinfo="percent+label", textposition="outside")
+            fig.update_layout(height=340, showlegend=False,
+                              margin=dict(l=0, r=0, t=8, b=0))
+            right.plotly_chart(fig, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
-def _load_data() -> tuple[pd.DataFrame, bool, dict]:
+def _load_data() -> tuple[pd.DataFrame, bool, dict, dict, pd.DataFrame]:
     """Load real data from secrets if configured, else fall back to demo."""
     try:
         tok = st.secrets["INSTAGRAM_ACCESS_TOKEN"]
         uid = st.secrets["INSTAGRAM_USER_ID"]
     except Exception:
-        return _demo_data(), False, {}
+        return _demo_data(), False, {}, {}, pd.DataFrame()
 
     try:
-        df, ins_err, user_info = _api_data(tok, uid)
+        df, ins_err, user_info, demographics, follower_growth = _api_data(tok, uid)
         if df.empty:
             st.warning("API connected but returned no posts. Check your Instagram User ID.")
-            return _demo_data(), False, {}
+            return _demo_data(), False, {}, {}, pd.DataFrame()
         if ins_err:
             st.warning(f"Insights API error (some metrics may be 0): {ins_err}")
-        return df, True, user_info
+        return df, True, user_info, demographics, follower_growth
     except Exception as e:
         st.error(f"Instagram API error: {e}")
-        return _demo_data(), False, {}
+        return _demo_data(), False, {}, {}, pd.DataFrame()
 
 
 def main():
     user_email = _check_access()
 
-    df_raw, using_api, user_info = _load_data()
+    df_raw, using_api, user_info, demographics, follower_growth = _load_data()
     date_range, sel_types = _sidebar(df_raw, user_email)
     df = _filter(df_raw, date_range, sel_types)
 
@@ -987,18 +1129,20 @@ def main():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    t1, t2, t3, t4, t5 = st.tabs([
+    t1, t2, t3, t4, t5, t6 = st.tabs([
         "📈  Overview",
         "🔍  Post Explorer",
         "🎬  Reels",
         "🖼️  Carousels & Images",
         "🧠  Strategy",
+        "👥  Audience",
     ])
     with t1: tab_overview(df, df_raw, date_range)
     with t2: tab_posts(df)
     with t3: tab_reels(df)
     with t4: tab_static(df)
     with t5: tab_strategy(df)
+    with t6: tab_audience(demographics, follower_growth, user_info)
 
 
 if __name__ == "__main__":

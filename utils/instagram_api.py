@@ -18,7 +18,7 @@ To get a long-lived token: exchange a short-lived token via
 
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 BASE = "https://graph.facebook.com/v19.0"
 
@@ -107,6 +107,42 @@ class InstagramAPI:
             except Exception as e2:
                 self._last_insights_error = str(e2)
                 return {}
+
+    def get_follower_growth(self, days: int = 90) -> pd.DataFrame:
+        since = int((datetime.now() - timedelta(days=days)).timestamp())
+        until = int(datetime.now().timestamp())
+        try:
+            data = self._get(f"{self.user_id}/insights", {
+                "metric": "follower_count",
+                "period": "day",
+                "since": since,
+                "until": until,
+            })
+            rows = []
+            for item in data.get("data", []):
+                for v in item.get("values", []):
+                    rows.append({
+                        "date": pd.to_datetime(v["end_time"]).tz_localize(None).normalize(),
+                        "followers": v["value"],
+                    })
+            return pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+        except Exception:
+            return pd.DataFrame()
+
+    def get_audience_demographics(self) -> dict:
+        try:
+            data = self._get(f"{self.user_id}/insights", {
+                "metric": "audience_gender_age,audience_city,audience_country",
+                "period": "lifetime",
+            })
+            result = {}
+            for item in data.get("data", []):
+                name = item.get("name")
+                val = item.get("value") or (item.get("values") or [{}])[-1].get("value", {})
+                result[name] = val
+            return result
+        except Exception:
+            return {}
 
     def fetch_all_posts(self) -> pd.DataFrame:
         import streamlit as st
