@@ -29,31 +29,57 @@ st.markdown(
 footer    {visibility: hidden;}
 header    {visibility: hidden;}
 
+/* Overall page */
+.block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
+
 /* Metric cards */
 [data-testid="metric-container"] {
     background: #ffffff;
-    border: 1px solid #e8e8e8;
-    border-radius: 12px;
-    padding: 16px 20px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    border: 1px solid #ebebeb;
+    border-radius: 14px;
+    padding: 20px 22px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
 }
-[data-testid="stMetricLabel"] { font-size: 12px; color: #666; }
-[data-testid="stMetricValue"] { font-size: 22px; font-weight: 700; }
+[data-testid="stMetricLabel"]       { font-size: 11px; color: #888; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+[data-testid="stMetricValue"]       { font-size: 28px; font-weight: 800; color: #111; line-height: 1.2; }
+[data-testid="stMetricDelta"]       { font-size: 12px; }
 
 /* Section headers */
-.sec { font-size:15px; font-weight:700; color:#1a1a2e;
-       border-bottom:2px solid #E1306C; padding-bottom:6px;
-       margin:20px 0 12px; display:inline-block; }
+.sec { font-size:13px; font-weight:700; color:#888; letter-spacing:0.06em;
+       text-transform:uppercase; border-bottom:2px solid #E1306C;
+       padding-bottom:5px; margin:24px 0 14px; display:inline-block; }
 
 /* Tab labels */
-button[data-baseweb="tab"] { font-size:14px; font-weight:600; }
+button[data-baseweb="tab"]          { font-size:13px; font-weight:600; }
+
+/* Account header */
+.acct-name  { font-size:22px; font-weight:800; color:#111; }
+.acct-sub   { font-size:13px; color:#888; margin-top:2px; }
+
+/* Tier badges inline */
+.badge-excellent { color:#00C851; font-weight:700; }
+.badge-good      { color:#33b5e5; font-weight:700; }
+.badge-average   { color:#ffbb33; font-weight:700; }
+.badge-low       { color:#FF4444; font-weight:700; }
 
 /* Demo banner */
 .demo-banner {
     background: linear-gradient(90deg,#833AB4,#E1306C,#F77737);
-    color: white; border-radius:8px; padding:10px 16px;
+    color: white; border-radius:10px; padding:12px 18px;
     font-size:13px; margin-bottom:16px;
 }
+
+/* Post detail panel */
+.post-detail {
+    background: #f9f9fb;
+    border: 1px solid #ebebeb;
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin-top: 12px;
+}
+
+/* Dataframe tweaks */
+[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -344,69 +370,108 @@ def tab_posts(df: pd.DataFrame):
         st.warning("No posts match your current filters.")
         return
 
-    st.markdown("Sort and drill into every post. Click any row to expand full metrics.")
-    st.markdown("<br>", unsafe_allow_html=True)
+    SORT_OPTS = {
+        "performance_score": "Performance Score",
+        "reach":             "Reach",
+        "engagement_rate":   "Engagement Rate",
+        "save_rate":         "Save Rate",
+        "likes":             "Likes",
+        "saves":             "Saves",
+        "shares":            "Shares",
+        "comments":          "Comments",
+        "timestamp":         "Date Posted",
+    }
+    c1, c2 = st.columns([3, 1])
+    sort_by = c1.selectbox("Sort by", list(SORT_OPTS.keys()),
+                            format_func=lambda x: SORT_OPTS[x])
+    asc = c2.radio("Order", ["Highest first", "Lowest first"],
+                   horizontal=True) == "Lowest first"
 
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        sort_by = st.selectbox("Sort by", [
-            "performance_score", "engagement_rate", "save_rate",
-            "reach", "shares", "comments", "timestamp",
-        ], format_func=lambda x: {
-            "performance_score": "Performance Score",
-            "engagement_rate": "Engagement Rate",
-            "save_rate": "Save Rate",
-            "reach": "Reach",
-            "shares": "Shares",
-            "comments": "Comments",
-            "timestamp": "Date Posted",
-        }[x])
-    with c2:
-        asc = st.radio("Order", ["Highest first", "Lowest first"], horizontal=True) == "Lowest first"
+    sorted_df = df.sort_values(sort_by, ascending=asc).reset_index(drop=True)
 
-    tier_icon = {"Excellent": "🟢", "Good": "🔵", "Average": "🟡", "Low": "🔴"}
-    type_icon = {"REEL": "🎬", "VIDEO": "🎬", "CAROUSEL_ALBUM": "🖼️", "IMAGE": "📸"}
+    # Build the display table
+    TIER_BADGE = {"Excellent": "🟢 Excellent", "Good": "🔵 Good",
+                  "Average": "🟡 Average", "Low": "🔴 Low"}
+    TYPE_ICON  = {"REEL": "🎬 Reel", "VIDEO": "🎬 Video",
+                  "CAROUSEL_ALBUM": "🖼️ Carousel", "IMAGE": "📸 Image"}
 
-    for _, r in df.sort_values(sort_by, ascending=asc).iterrows():
-        reach_str = _fmt_num(r["reach"])
-        er_str    = _fmt_pct(r["engagement_rate"])
-        saves_str = _fmt_num(r["saves"])
-        likes_str = _fmt_num(r["likes"])
-        label = (
-            f"{tier_icon.get(str(r['performance_tier']), '⚪')} "
-            f"{type_icon.get(r['media_type'], '📄')} "
-            f"{r['timestamp'].strftime('%b %d, %Y')}  ·  "
-            f"Reach {reach_str}  ·  ER {er_str}  ·  "
-            f"Saves {saves_str}  ·  Likes {likes_str}  ·  "
-            f"Score {r['performance_score']}/100"
-        )
-        with st.expander(label, expanded=False):
-            st.caption(f"📝 {r['caption'][:120]}…" if len(str(r['caption'])) > 120 else f"📝 {r['caption']}")
-            st.markdown("")
-            a, b, c, d = st.columns(4)
-            a.metric("Reach",           _fmt_num(r["reach"]))
-            a.metric("Likes",           _fmt_num(r["likes"]))
-            b.metric("Engagement Rate", _fmt_pct(r["engagement_rate"]))
-            b.metric("Save Rate",       _fmt_pct(r["save_rate"]))
-            c.metric("Saves",           _fmt_num(r["saves"]))
-            c.metric("Shares",          _fmt_num(r["shares"]))
-            d.metric("Comments",        _fmt_num(r["comments"]))
-            d.metric("Score",           f"{r['performance_score']}/100")
+    tbl = pd.DataFrame({
+        "Tier":      sorted_df["performance_tier"].map(TIER_BADGE),
+        "Type":      sorted_df["media_type"].map(TYPE_ICON),
+        "Date":      sorted_df["timestamp"].dt.strftime("%b %d, %Y"),
+        "Caption":   sorted_df["caption"].str[:60] + "…",
+        "Reach":     sorted_df["reach"].astype(int),
+        "Likes":     sorted_df["likes"].astype(int),
+        "Comments":  sorted_df["comments"].astype(int),
+        "Saves":     sorted_df["saves"].astype(int),
+        "Shares":    sorted_df["shares"].astype(int),
+        "ER%":       sorted_df["engagement_rate"].round(2),
+        "Save Rate": sorted_df["save_rate"].round(2),
+        "Score":     sorted_df["performance_score"],
+    })
 
-            if r["media_type"] in ("REEL", "VIDEO") and r["video_views"] > 0:
-                st.markdown("---")
-                v1, v2, v3, v4 = st.columns(4)
-                v1.metric("Video Plays", _fmt_num(r["video_views"]))
-                v2.metric("Play Rate",   _fmt_pct(r.get("play_rate"), 0))
-                v3.metric("Avg Watch Time",
-                          f"{r['avg_watch_time_sec']:.1f}s" if pd.notna(r.get("avg_watch_time_sec")) else "—")
-                v4.metric("Completion Rate",
-                          _fmt_pct(r.get("completion_rate"), 0))
+    event = st.dataframe(
+        tbl,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "Score": st.column_config.ProgressColumn(
+                "Score", min_value=0, max_value=100, format="%d / 100"),
+            "Reach":    st.column_config.NumberColumn("Reach",    format="%d"),
+            "Likes":    st.column_config.NumberColumn("Likes",    format="%d"),
+            "Comments": st.column_config.NumberColumn("Comments", format="%d"),
+            "Saves":    st.column_config.NumberColumn("Saves",    format="%d"),
+            "Shares":   st.column_config.NumberColumn("Shares",   format="%d"),
+            "ER%":      st.column_config.NumberColumn("ER%",      format="%.2f%%"),
+            "Save Rate":st.column_config.NumberColumn("Save Rate",format="%.2f%%"),
+        },
+    )
 
-            st.markdown(
-                f"**Tier:** {r['performance_tier']}  ·  "
-                f"[Open on Instagram ↗]({r['permalink']})"
-            )
+    # Drill-down panel for selected row
+    sel = event.selection.rows if hasattr(event, "selection") else []
+    if sel:
+        r = sorted_df.iloc[sel[0]]
+        st.markdown("<br>", unsafe_allow_html=True)
+        _sec(f"Post Detail — {r['timestamp'].strftime('%B %d, %Y')}")
+
+        hdr, lnk = st.columns([6, 1])
+        hdr.markdown(f"**{TYPE_ICON.get(r['media_type'], r['media_type'])}** &nbsp;·&nbsp; "
+                     f"{TIER_BADGE.get(str(r['performance_tier']), r['performance_tier'])}")
+        lnk.markdown(f"[Open on Instagram ↗]({r['permalink']})")
+
+        if r.get("caption"):
+            st.markdown(f"> {r['caption'][:300]}")
+
+        st.markdown("")
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("Reach",     _fmt_num(r["reach"]))
+        m2.metric("Likes",     _fmt_num(r["likes"]))
+        m3.metric("Comments",  _fmt_num(r["comments"]))
+        m4.metric("Saves",     _fmt_num(r["saves"]))
+        m5.metric("Shares",    _fmt_num(r["shares"]))
+        m6.metric("Score",     f"{r['performance_score']}/100")
+
+        m7, m8, m9, m10 = st.columns(4)
+        m7.metric("Engagement Rate", _fmt_pct(r["engagement_rate"]),
+                  help="(likes+comments+saves+shares) ÷ reach")
+        m8.metric("Save Rate",       _fmt_pct(r["save_rate"]),
+                  help="saves ÷ reach — best algorithmic signal")
+        m9.metric("Share Rate",      _fmt_pct(r["share_rate"]))
+        m10.metric("Comment Rate",   _fmt_pct(r["comment_rate"]))
+
+        if r["media_type"] in ("REEL", "VIDEO") and r["video_views"] > 0:
+            st.markdown("---")
+            v1, v2, v3, v4 = st.columns(4)
+            v1.metric("Video Plays",     _fmt_num(r["video_views"]))
+            v2.metric("Play Rate",       _fmt_pct(r.get("play_rate"), 0))
+            v3.metric("Avg Watch Time",
+                      f"{r['avg_watch_time_sec']:.1f}s"
+                      if pd.notna(r.get("avg_watch_time_sec")) else "—")
+            v4.metric("Completion Rate", _fmt_pct(r.get("completion_rate"), 0))
+    else:
+        st.caption("👆 Click any row to see full post details.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
